@@ -1,6 +1,6 @@
 {
   "name": "matterbridge-mqtt",
-  "version": "1.0.0-oregon.1",
+  "version": "1.0.0-oregon.2",
   "description": "Matterbridge MQTT plugin",
   "author": "https://github.com/Luligu",
   "license": "Apache-2.0",

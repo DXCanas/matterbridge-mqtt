@@ -29,16 +29,30 @@ import {
   getSupportedDeviceType,
   MatterbridgeDynamicPlatform,
   MatterbridgeEndpoint,
+  MatterbridgeServiceAreaServer,
   type PlatformConfig,
   type PlatformMatterbridge,
 } from 'matterbridge';
+import { MatterbridgeRvcCleanModeServer, MatterbridgeRvcOperationalStateServer, MatterbridgeRvcRunModeServer } from 'matterbridge/devices';
 import { type AnsiLogger, debugStringify, info, type LogLevel, warn } from 'matterbridge/logger';
-import { type AtLeastOne, ClusterBehavior } from 'matterbridge/matter';
-import type { BridgedDeviceBasicInformation, PowerSource } from 'matterbridge/matter/clusters';
+import { type AtLeastOne, type Behavior, ClusterBehavior } from 'matterbridge/matter';
+import { type BridgedDeviceBasicInformation, type PowerSource, RvcCleanMode, RvcOperationalState, RvcRunMode, ServiceArea } from 'matterbridge/matter/clusters';
+import type { ClusterId } from 'matterbridge/matter/types';
 import { fireAndForget, inspectError } from 'matterbridge/utils';
 import type { IPublishPacket } from 'mqtt';
 
 import { MqttService } from './mqtt.js';
+
+/**
+ * Cluster servers that Matterbridge provides but that its `getBehaviourTypeFromClusterServerId()` registry does not return,
+ * looked up before the registry: the robot vacuum cleaner clusters and ServiceArea.
+ */
+const additionalClusterBehaviors: ReadonlyMap<ClusterId, Behavior.Type> = new Map<ClusterId, Behavior.Type>([
+  [RvcRunMode.id, MatterbridgeRvcRunModeServer],
+  [RvcCleanMode.id, MatterbridgeRvcCleanModeServer],
+  [RvcOperationalState.id, MatterbridgeRvcOperationalStateServer],
+  [ServiceArea.id, MatterbridgeServiceAreaServer],
+]);
 
 export interface MqttPlatformConfig extends PlatformConfig {
   host: string;
@@ -485,8 +499,7 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
         this.log.warn(`Cluster '${cluster}' is not supported. Skipping.`);
         continue;
       }
-      const behavior = getBehaviourTypeFromClusterServerId(found.id);
-      /* v8 ignore next -- @preserve: defensive only cause current Matterbridge registry exposes a behavior for every supported cluster. */
+      const behavior = additionalClusterBehaviors.get(found.id) ?? getBehaviourTypeFromClusterServerId(found.id);
       if (!behavior) {
         this.log.warn(`Cluster '${cluster}' does not have a defined behavior. Skipping.`);
         continue;

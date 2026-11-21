@@ -42,6 +42,7 @@ If you like this project and find it useful, please consider giving it a star on
 ### Fixed
 
 - [platform]: Add one subscribe listener per device attribute, instead of one more for every subscribe message.
+- [platform]: Add the RvcRunMode, RvcCleanMode, RvcOperationalState and ServiceArea cluster servers, missing from the Matterbridge behavior registry.
 
 ## [1.0.0] - 2026-11-14
 

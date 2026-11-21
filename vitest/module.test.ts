@@ -15,9 +15,11 @@ const MATTER_PORT = 6000;
 
 import { readFileSync } from 'node:fs';
 
-import { bridgedNode, MatterbridgeEndpoint, type PlatformMatterbridge } from 'matterbridge';
+import { bridgedNode, MatterbridgeEndpoint, MatterbridgeServiceAreaServer, type PlatformMatterbridge } from 'matterbridge';
+import { MatterbridgeRvcCleanModeServer, MatterbridgeRvcOperationalStateServer, MatterbridgeRvcRunModeServer } from 'matterbridge/devices';
 import { LogLevel } from 'matterbridge/logger';
 import { ClusterBehavior } from 'matterbridge/matter';
+import { RvcCleanMode, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -593,6 +595,64 @@ describe('MqttPlatform', () => {
       platform.createDevice('features-unknown', 'root', { deviceTypes: ['Fan'], clusters: { FanControl: { features: ['NotAFeature'] } } });
       expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringMatching(/Cluster 'FanControl' does not support the features NotAFeature/));
       expect(registerDeviceSpy).toHaveBeenCalledTimes(1);
+      registerDeviceSpy.mockRestore();
+    });
+
+    it('should warn and skip a supported cluster that has no behavior', () => {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice').mockReturnValue(Promise.resolve());
+      platform.createDevice('no-behavior', 'root', { deviceTypes: ['OnOffLight'], clusters: { Chime: {} } });
+      expect(loggerWarnSpy).toHaveBeenCalledWith("Cluster 'Chime' does not have a defined behavior. Skipping.");
+      registerDeviceSpy.mockRestore();
+    });
+
+    it('should create and register a robot vacuum cleaner with the run mode, clean mode, operational state and service area servers', async () => {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice');
+      platform.createDevice('rvc1', 'root', {
+        deviceTypes: ['RoboticVacuumCleaner'],
+        clusters: {
+          RvcRunMode: {
+            supportedModes: [
+              { label: 'Idle', mode: 1, modeTags: [{ value: RvcRunMode.ModeTag.Idle }] },
+              { label: 'Cleaning', mode: 2, modeTags: [{ value: RvcRunMode.ModeTag.Cleaning }] },
+            ],
+            currentMode: 1,
+          },
+          RvcCleanMode: {
+            supportedModes: [
+              { label: 'Vacuum', mode: 1, modeTags: [{ value: RvcCleanMode.ModeTag.Vacuum }] },
+              { label: 'Mop', mode: 2, modeTags: [{ value: RvcCleanMode.ModeTag.Mop }] },
+            ],
+            currentMode: 1,
+          },
+          RvcOperationalState: {
+            operationalStateList: [
+              { operationalStateId: RvcOperationalState.OperationalState.Stopped },
+              { operationalStateId: RvcOperationalState.OperationalState.Running },
+              { operationalStateId: RvcOperationalState.OperationalState.Paused },
+              { operationalStateId: RvcOperationalState.OperationalState.Error },
+              { operationalStateId: RvcOperationalState.OperationalState.Docked },
+            ],
+            operationalState: RvcOperationalState.OperationalState.Docked,
+            operationalError: { errorStateId: RvcOperationalState.ErrorState.NoError },
+          },
+          ServiceArea: {
+            supportedAreas: [{ areaId: 1, mapId: null, areaInfo: { locationInfo: { locationName: 'Living room', floorNumber: null, areaType: null }, landmarkInfo: null } }],
+            selectedAreas: [],
+            currentArea: null,
+            estimatedEndTime: null,
+          },
+        },
+      });
+      expect(loggerWarnSpy).not.toHaveBeenCalledWith(expect.stringMatching(/does not have a defined behavior/));
+      expect(registerDeviceSpy).toHaveBeenCalledTimes(1);
+      await registerDeviceSpy.mock.results[0]?.value;
+      const device = registerDeviceSpy.mock.calls[0]?.[0];
+      expect(device?.behaviors.supported.rvcRunMode).toBe(MatterbridgeRvcRunModeServer);
+      expect(device?.behaviors.supported.rvcCleanMode).toBe(MatterbridgeRvcCleanModeServer);
+      expect(device?.behaviors.supported.rvcOperationalState).toBe(MatterbridgeRvcOperationalStateServer);
+      expect(device?.behaviors.supported.serviceArea).toBe(MatterbridgeServiceAreaServer);
+      expect(device?.construction.status).toBe('active');
+      expect(platform.getDeviceById('rvc1')).toBe(device);
       registerDeviceSpy.mockRestore();
     });
 

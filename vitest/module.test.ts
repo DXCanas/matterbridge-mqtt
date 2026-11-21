@@ -874,6 +874,37 @@ describe('MqttPlatform', () => {
       getDeviceByIdSpy.mockRestore();
     });
 
+    it('should add one listener per device attribute however many subscribe messages arrive', async () => {
+      const mockDevice = {
+        hasClusterServer: vi.fn<(cluster?: unknown) => boolean>().mockReturnValue(true),
+        hasAttributeServer: vi.fn<(cluster?: unknown, attribute?: unknown) => boolean>().mockReturnValue(true),
+        subscribeAttribute: vi.fn<(...args: unknown[]) => void>(),
+      };
+      // oxlint-disable-next-line typescript/ban-ts-comment
+      // @ts-ignore accessing inherited method for testing
+      const getDeviceByIdSpy = vi.spyOn(platform, 'getDeviceById').mockReturnValue(mockDevice);
+      await platform.subscribeHandler(`${config.topic}/repeat1/subscribe/root`, JSON.stringify({ OnOff: ['onOff'] }));
+      await platform.subscribeHandler(`${config.topic}/repeat1/subscribe/root`, JSON.stringify({ OnOff: ['onOff'] }));
+      await platform.subscribeHandler(`${config.topic}/repeat1/subscribe/root`, JSON.stringify({ OnOff: ['onOff'], LevelControl: ['currentLevel'] }));
+      expect(mockDevice.subscribeAttribute).toHaveBeenCalledTimes(2);
+      expect(mockDevice.subscribeAttribute).toHaveBeenNthCalledWith(1, 'OnOff', 'onOff', expect.any(Function));
+      expect(mockDevice.subscribeAttribute).toHaveBeenNthCalledWith(2, 'LevelControl', 'currentLevel', expect.any(Function));
+      expect(loggerDebugSpy).toHaveBeenCalledWith(expect.stringMatching(/Already subscribed to cluster 'OnOff:onOff' for device 'repeat1'/));
+
+      // A re-created device is a new endpoint and gets its own listener
+      const recreatedDevice = {
+        hasClusterServer: vi.fn<(cluster?: unknown) => boolean>().mockReturnValue(true),
+        hasAttributeServer: vi.fn<(cluster?: unknown, attribute?: unknown) => boolean>().mockReturnValue(true),
+        subscribeAttribute: vi.fn<(...args: unknown[]) => void>(),
+      };
+      // oxlint-disable-next-line typescript/ban-ts-comment
+      // @ts-ignore mock device for testing
+      getDeviceByIdSpy.mockReturnValue(recreatedDevice);
+      await platform.subscribeHandler(`${config.topic}/repeat1/subscribe/root`, JSON.stringify({ OnOff: ['onOff'] }));
+      expect(recreatedDevice.subscribeAttribute).toHaveBeenCalledTimes(1);
+      getDeviceByIdSpy.mockRestore();
+    });
+
     it('should subscribe known attributes and skip unknown attributes in the same cluster', async () => {
       const mockDevice = {
         hasClusterServer: vi.fn<(cluster?: unknown) => boolean>().mockReturnValue(true),

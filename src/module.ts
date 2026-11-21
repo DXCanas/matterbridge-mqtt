@@ -131,6 +131,8 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
   outgoing: ApiMessage[] = [];
   /** Retained config, state and subscribe payloads per deviceId for the frontend devices table. */
   deviceData: Map<string, DeviceData> = new Map();
+  /** The `cluster:attribute` keys each device already has a subscribe listener for, so repeated subscribe messages add no second listener. */
+  private readonly subscribedAttributes = new WeakMap<MatterbridgeEndpoint, Set<string>>();
 
   /**
    * Initializes the MQTT platform plugin.
@@ -608,6 +610,16 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
             );
             continue;
           }
+          let subscribed = this.subscribedAttributes.get(device);
+          if (!subscribed) {
+            subscribed = new Set();
+            this.subscribedAttributes.set(device, subscribed);
+          }
+          if (subscribed.has(`${clusterName}:${attributeName}`)) {
+            this.log.debug(`Already subscribed to cluster '${clusterName}:${attributeName}' for device '${deviceId}'. Skipping.`);
+            continue;
+          }
+          subscribed.add(`${clusterName}:${attributeName}`);
           device.subscribeAttribute(clusterName, attributeName, (value, _oldValue, context) => {
             // A change made locally (e.g. by a state message through setCluster) has no fabric: only controller changes have one.
             if (this.config.ignoreLocalChanges === true && context?.fabric === undefined) {

@@ -32,7 +32,7 @@ If you like this project and find it useful, please consider giving it a star on
 
 ---
 
-## [1.0.0-oregon.1] - Dev branch
+## [1.0.0-oregon.1] - 2026-11-21
 
 ### Added
 

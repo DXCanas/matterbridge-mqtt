@@ -107,6 +107,15 @@ const config = {
 publish('matterbridge/light1/config/root', JSON.stringify(config), { retain: true, qos: 2 });
 ```
 
+A cluster may carry an optional `features` list with the Matter feature names to enable on that cluster. It is not an attribute: the plugin removes it and builds the cluster server with those features.
+
+```typescript
+const config = {
+  deviceTypes: ['Fan'],
+  clusters: { FanControl: { features: ['MultiSpeed', 'Rocking'], fanModeSequence: 2, speedMax: 3, rockSupport: { rockLeftRight: true } } },
+};
+```
+
 ### state
 
 - **matterbridge/deviceid/state/root**

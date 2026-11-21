@@ -33,7 +33,7 @@ import {
   type PlatformMatterbridge,
 } from 'matterbridge';
 import { type AnsiLogger, debugStringify, info, type LogLevel, warn } from 'matterbridge/logger';
-import type { AtLeastOne } from 'matterbridge/matter';
+import { type AtLeastOne, ClusterBehavior } from 'matterbridge/matter';
 import type { BridgedDeviceBasicInformation, PowerSource } from 'matterbridge/matter/clusters';
 import { fireAndForget, inspectError } from 'matterbridge/utils';
 import type { IPublishPacket } from 'mqtt';
@@ -488,7 +488,23 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
         continue;
       }
       this.log.debug(`*Adding behavior '${behavior.name}' to device '${deviceId}' for cluster '${cluster}' with configuration: ${debugStringify(jsonPayload.clusters[cluster])}`);
-      device.behaviors.require(behavior, jsonPayload.clusters[cluster]);
+      // The optional `features` list selects the cluster features (e.g. `["Lighting"]`); it is not an attribute.
+      const { features, ...attributes } = jsonPayload.clusters[cluster];
+      const featureNames = Array.isArray(features) ? features.filter((feature): feature is string => typeof feature === 'string') : [];
+      if (featureNames.length === 0) {
+        device.behaviors.require(behavior, attributes);
+        continue;
+      }
+      /* v8 ignore next -- @preserve: defensive only cause every behavior in the Matterbridge registry is a cluster behavior. */
+      if (!ClusterBehavior.isType(behavior)) {
+        this.log.warn(`Cluster '${cluster}' behavior '${behavior.name}' does not support features. Skipping.`);
+        continue;
+      }
+      try {
+        device.behaviors.require(behavior.with(...featureNames), attributes);
+      } catch (error) {
+        inspectError(this.log, `Cluster '${cluster}' does not support the features ${featureNames.join(', ')}. Skipping.`, error);
+      }
     }
 
     device.addRequiredClusters();

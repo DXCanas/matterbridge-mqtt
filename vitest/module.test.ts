@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 
 import { bridgedNode, MatterbridgeEndpoint, type PlatformMatterbridge } from 'matterbridge';
 import { LogLevel } from 'matterbridge/logger';
+import { ClusterBehavior } from 'matterbridge/matter';
 import {
   addMatterbridge,
   createServerNode,
@@ -571,6 +572,28 @@ describe('MqttPlatform', () => {
         clusters: {},
       });
       expect(loggerDebugSpy).toHaveBeenCalledWith(expect.stringMatching(/Creating device with ID soil1/));
+    });
+
+    it('should select the cluster features listed in features and not pass them as attributes', () => {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice').mockReturnValue(Promise.resolve());
+      platform.createDevice('features-fan', 'root', {
+        deviceTypes: ['Fan'],
+        clusters: { FanControl: { features: ['MultiSpeed', 'Rocking', 42], fanModeSequence: 2, speedMax: 3 } },
+      });
+      const device = registerDeviceSpy.mock.calls[0]?.[0];
+      expect(device).toBeInstanceOf(MatterbridgeEndpoint);
+      const fanControl = device?.behaviors.supported.fanControl;
+      expect(fanControl && ClusterBehavior.isType(fanControl) ? fanControl.features : undefined).toMatchObject({ multiSpeed: true, rocking: true, wind: false });
+      expect(fanControl ? device?.behaviors.optionsFor(fanControl) : undefined).toEqual({ fanModeSequence: 2, speedMax: 3 });
+      registerDeviceSpy.mockRestore();
+    });
+
+    it('should log an error and skip the cluster when features names an unknown feature', () => {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice').mockReturnValue(Promise.resolve());
+      platform.createDevice('features-unknown', 'root', { deviceTypes: ['Fan'], clusters: { FanControl: { features: ['NotAFeature'] } } });
+      expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringMatching(/Cluster 'FanControl' does not support the features NotAFeature/));
+      expect(registerDeviceSpy).toHaveBeenCalledTimes(1);
+      registerDeviceSpy.mockRestore();
     });
 
     it('should point the configUrl at the plugin frontend with the device id', () => {

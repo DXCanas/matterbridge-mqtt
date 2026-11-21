@@ -32,6 +32,12 @@ If you like this project and find it useful, please consider giving it a star on
 
 ---
 
+## [1.0.0-oregon.1] - Dev branch
+
+### Added
+
+- [platform]: Accept a `features` list in a cluster config to select the cluster features.
+
 ## [1.0.0] - 2026-11-14
 
 ### Changed

@@ -19,7 +19,7 @@ import { bridgedNode, MatterbridgeEndpoint, MatterbridgeServiceAreaServer, type 
 import { MatterbridgeRvcCleanModeServer, MatterbridgeRvcOperationalStateServer, MatterbridgeRvcRunModeServer } from 'matterbridge/devices';
 import { LogLevel } from 'matterbridge/logger';
 import { ClusterBehavior } from 'matterbridge/matter';
-import { RvcCleanMode, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
+import { ModeBase, RvcCleanMode, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -42,6 +42,7 @@ import type { IPublishPacket } from 'mqtt';
 
 import initializePlugin, { MqttPlatform, type MqttPlatformConfig } from '../src/module.js';
 import { MqttService } from '../src/mqtt.js';
+import { DeviceStateRvcOperationalStateServer, DeviceStateRvcRunModeServer } from '../src/servers.js';
 
 const mqttConnectSpy = vi.spyOn(MqttService.prototype, 'connect').mockResolvedValue(true);
 const mqttCloseSpy = vi.spyOn(MqttService.prototype, 'close').mockResolvedValue(true);
@@ -654,6 +655,149 @@ describe('MqttPlatform', () => {
       expect(device?.construction.status).toBe('active');
       expect(platform.getDeviceById('rvc1')).toBe(device);
       registerDeviceSpy.mockRestore();
+    });
+
+    /**
+     * Creates and registers a robot vacuum whose run modes are 1 Stop and 2 Home (Idle) and 3 Auto and 4 Spot (Cleaning), docked and stopped.
+     *
+     * @param {string} id - The device id.
+     * @param {Record<string, unknown>} runMode - Extra RvcRunMode config keys (e.g. behavior, features).
+     * @param {Record<string, unknown>} operationalState - Extra RvcOperationalState config keys.
+     * @returns {Promise<MatterbridgeEndpoint>} The registered device.
+     */
+    async function registerVacuum(id: string, runMode: Record<string, unknown>, operationalState: Record<string, unknown>): Promise<MatterbridgeEndpoint> {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice');
+      platform.createDevice(id, 'root', {
+        deviceTypes: ['RoboticVacuumCleaner'],
+        clusters: {
+          RvcRunMode: {
+            ...runMode,
+            supportedModes: [
+              { label: 'Stop', mode: 1, modeTags: [{ value: RvcRunMode.ModeTag.Idle }] },
+              { label: 'Home', mode: 2, modeTags: [{ value: RvcRunMode.ModeTag.Idle }] },
+              { label: 'Auto', mode: 3, modeTags: [{ value: RvcRunMode.ModeTag.Cleaning }, { value: RvcRunMode.ModeTag.Auto }] },
+              { label: 'Spot', mode: 4, modeTags: [{ value: RvcRunMode.ModeTag.Cleaning }] },
+            ],
+            currentMode: 1,
+          },
+          RvcCleanMode: {
+            supportedModes: [
+              { label: 'Vacuum', mode: 1, modeTags: [{ value: RvcCleanMode.ModeTag.Vacuum }] },
+              { label: 'Max', mode: 2, modeTags: [{ value: RvcCleanMode.ModeTag.Vacuum }, { value: RvcCleanMode.ModeTag.Max }] },
+            ],
+            currentMode: 1,
+          },
+          RvcOperationalState: {
+            ...operationalState,
+            operationalStateList: [
+              { operationalStateId: RvcOperationalState.OperationalState.Stopped },
+              { operationalStateId: RvcOperationalState.OperationalState.Running },
+              { operationalStateId: RvcOperationalState.OperationalState.Paused },
+              { operationalStateId: RvcOperationalState.OperationalState.Error },
+              { operationalStateId: RvcOperationalState.OperationalState.SeekingCharger },
+              { operationalStateId: RvcOperationalState.OperationalState.Docked },
+            ],
+            operationalState: RvcOperationalState.OperationalState.Docked,
+            operationalError: { errorStateId: RvcOperationalState.ErrorState.NoError },
+          },
+        },
+      });
+      expect(registerDeviceSpy).toHaveBeenCalledTimes(1);
+      await registerDeviceSpy.mock.results[0]?.value;
+      const device = registerDeviceSpy.mock.calls[0]?.[0];
+      registerDeviceSpy.mockRestore();
+      if (!device) throw new Error(`Vacuum ${id} not registered`);
+      expect(device.construction.status).toBe('active');
+      return device;
+    }
+
+    it('should leave the operational state to the device with the deviceState run mode and operational state behaviors', async () => {
+      const device = await registerVacuum('rvc-device-state', { behavior: 'deviceState' }, { behavior: 'deviceState' });
+      expect(device.behaviors.supported.rvcRunMode).toBe(DeviceStateRvcRunModeServer);
+      expect(device.behaviors.supported.rvcOperationalState).toBe(DeviceStateRvcOperationalStateServer);
+      expect(device.behaviors.supported.rvcCleanMode).toBe(MatterbridgeRvcCleanModeServer);
+      expect(device.behaviors.optionsFor(DeviceStateRvcRunModeServer)).not.toHaveProperty('behavior');
+      expect(device.behaviors.optionsFor(DeviceStateRvcOperationalStateServer)).not.toHaveProperty('behavior');
+      const handler = vi.fn();
+      device.addCommandHandler('RvcRunMode.changeToMode', handler);
+      const operationalStateListener = vi.fn();
+      device.subscribeAttribute('RvcOperationalState', 'operationalState', operationalStateListener);
+      device.subscribeAttribute('RvcOperationalState', 'operationalError', operationalStateListener);
+      const changeToMode = async (newMode: number): Promise<ModeBase.ChangeToModeResponse> =>
+        device.act(async (agent) => agent.get(DeviceStateRvcRunModeServer).changeToMode({ newMode }));
+      const operationalState = (): unknown => device.getAttribute('RvcOperationalState', 'operationalState');
+
+      // A Cleaning mode: Matterbridge would make the operational state Running
+      expect(await changeToMode(3)).toEqual({ status: ModeBase.ModeChangeStatus.Success, statusText: 'Success' });
+      expect(device.getAttribute('RvcRunMode', 'currentMode')).toBe(3);
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Docked);
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ command: 'changeToMode', request: { newMode: 3 } }));
+      // Without DirectModeChange a Cleaning mode cannot change to another Cleaning mode
+      expect(await changeToMode(4)).toEqual({ status: ModeBase.ModeChangeStatus.InvalidInMode, statusText: 'Direct mode change is not supported while operating' });
+      expect(device.getAttribute('RvcRunMode', 'currentMode')).toBe(3);
+      // Without DirectModeChange the clean mode cannot change while the run mode is not Idle (Matterbridge's clean mode server reads our run mode server)
+      expect(await device.act(async (agent) => agent.get(MatterbridgeRvcCleanModeServer).changeToMode({ newMode: 2 }))).toEqual({
+        status: ModeBase.ModeChangeStatus.InvalidInMode,
+        statusText: 'Clean mode cannot change while operating',
+      });
+      // An Idle mode that does not dock: Matterbridge would make the operational state SeekingCharger
+      expect(await changeToMode(1)).toEqual({ status: ModeBase.ModeChangeStatus.Success, statusText: 'Success' });
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Docked);
+      expect(await changeToMode(1)).toEqual({ status: ModeBase.ModeChangeStatus.Success, statusText: 'Already in requested mode' });
+      expect(await changeToMode(9)).toEqual({ status: ModeBase.ModeChangeStatus.UnsupportedMode, statusText: 'Unsupported mode' });
+      expect(handler).toHaveBeenCalledTimes(5);
+
+      // Pause, resume and go home: Matterbridge's validation and response, the device's operational state
+      await device.setAttribute('RvcOperationalState', 'operationalState', RvcOperationalState.OperationalState.Running);
+      expect(operationalStateListener).toHaveBeenCalledTimes(1);
+      operationalStateListener.mockClear();
+      expect(await device.act(async (agent) => agent.get(DeviceStateRvcOperationalStateServer).pause())).toEqual({
+        commandResponseState: { errorStateId: RvcOperationalState.ErrorState.NoError, errorStateDetails: 'Fully operational' },
+      });
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Running);
+      expect(await device.act(async (agent) => agent.get(DeviceStateRvcOperationalStateServer).goHome())).toEqual({
+        commandResponseState: { errorStateId: RvcOperationalState.ErrorState.NoError, errorStateDetails: 'Fully operational' },
+      });
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Running);
+      expect(await device.act(async (agent) => agent.get(DeviceStateRvcOperationalStateServer).resume())).toEqual({
+        commandResponseState: { errorStateId: RvcOperationalState.ErrorState.NoError, errorStateDetails: 'Already running' },
+      });
+      await device.setAttribute('RvcOperationalState', 'operationalState', RvcOperationalState.OperationalState.Paused);
+      operationalStateListener.mockClear();
+      expect(await device.act(async (agent) => agent.get(DeviceStateRvcOperationalStateServer).resume())).toEqual({
+        commandResponseState: { errorStateId: RvcOperationalState.ErrorState.NoError, errorStateDetails: 'Fully operational' },
+      });
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Paused);
+      await device.setAttribute('RvcOperationalState', 'operationalState', RvcOperationalState.OperationalState.Docked);
+      operationalStateListener.mockClear();
+      expect(await device.act(async (agent) => agent.get(DeviceStateRvcOperationalStateServer).goHome())).toEqual({
+        commandResponseState: { errorStateId: RvcOperationalState.ErrorState.CommandInvalidInState, errorStateDetails: 'Cannot seek the charger in the current operational state' },
+      });
+      expect(operationalState()).toBe(RvcOperationalState.OperationalState.Docked);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(operationalStateListener).not.toHaveBeenCalled();
+    });
+
+    it('should change a Cleaning run mode directly with the deviceState behavior and the DirectModeChange feature', async () => {
+      const device = await registerVacuum('rvc-device-state-direct', { behavior: 'deviceState', features: ['DirectModeChange'] }, {});
+      expect(device.behaviors.supported.rvcOperationalState).toBe(MatterbridgeRvcOperationalStateServer);
+      const changeToMode = async (newMode: number): Promise<ModeBase.ChangeToModeResponse> =>
+        device.act(async (agent) => agent.get(DeviceStateRvcRunModeServer).changeToMode({ newMode }));
+      expect(await changeToMode(3)).toEqual({ status: ModeBase.ModeChangeStatus.Success, statusText: 'Success' });
+      expect(await changeToMode(4)).toEqual({ status: ModeBase.ModeChangeStatus.Success, statusText: 'Success' });
+      expect(device.getAttribute('RvcRunMode', 'currentMode')).toBe(4);
+      expect(device.getAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.OperationalState.Docked);
+    });
+
+    it('should warn and use the default behavior when the behavior name is unknown or not a string', async () => {
+      const device = await registerVacuum('rvc-unknown-behavior', { behavior: 'noSuchBehavior' }, { behavior: true });
+      expect(loggerWarnSpy).toHaveBeenCalledWith(`Cluster 'RvcRunMode' has no behavior "noSuchBehavior". Using the default behavior 'MatterbridgeRvcRunModeServer'.`);
+      expect(loggerWarnSpy).toHaveBeenCalledWith(`Cluster 'RvcOperationalState' has no behavior true. Using the default behavior 'MatterbridgeRvcOperationalStateServer'.`);
+      expect(device.behaviors.supported.rvcRunMode).toBe(MatterbridgeRvcRunModeServer);
+      expect(device.behaviors.supported.rvcOperationalState).toBe(MatterbridgeRvcOperationalStateServer);
+      // Matterbridge's own logic stays the default
+      await device.act(async (agent) => agent.get(MatterbridgeRvcRunModeServer).changeToMode({ newMode: 3 }));
+      expect(device.getAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.OperationalState.Running);
     });
 
     it('should point the configUrl at the plugin frontend with the device id', () => {

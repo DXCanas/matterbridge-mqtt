@@ -42,6 +42,7 @@ import { fireAndForget, inspectError } from 'matterbridge/utils';
 import type { IPublishPacket } from 'mqtt';
 
 import { MqttService } from './mqtt.js';
+import { behaviorVariants } from './servers.js';
 
 /**
  * Cluster servers that Matterbridge provides but that its `getBehaviourTypeFromClusterServerId()` registry does not return,
@@ -499,14 +500,21 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
         this.log.warn(`Cluster '${cluster}' is not supported. Skipping.`);
         continue;
       }
-      const behavior = additionalClusterBehaviors.get(found.id) ?? getBehaviourTypeFromClusterServerId(found.id);
+      let behavior = additionalClusterBehaviors.get(found.id) ?? getBehaviourTypeFromClusterServerId(found.id);
       if (!behavior) {
         this.log.warn(`Cluster '${cluster}' does not have a defined behavior. Skipping.`);
         continue;
       }
       this.log.debug(`*Adding behavior '${behavior.name}' to device '${deviceId}' for cluster '${cluster}' with configuration: ${debugStringify(jsonPayload.clusters[cluster])}`);
-      // The optional `features` list selects the cluster features (e.g. `["Lighting"]`); it is not an attribute.
-      const { features, ...attributes } = jsonPayload.clusters[cluster];
+      // The optional `features` list selects the cluster features (e.g. `["Lighting"]`) and the optional `behavior` name a server variant (e.g. `"deviceState"`); they are not attributes.
+      const { features, behavior: variantName, ...attributes } = jsonPayload.clusters[cluster];
+      const variant = typeof variantName === 'string' ? behaviorVariants.get(found.id)?.[variantName] : undefined;
+      if (variant) {
+        this.log.debug(`*Using behavior '${variant.name}' instead of '${behavior.name}' for cluster '${cluster}' of device '${deviceId}'`);
+        behavior = variant;
+      } else if (variantName !== undefined) {
+        this.log.warn(`Cluster '${cluster}' has no behavior ${JSON.stringify(variantName)}. Using the default behavior '${behavior.name}'.`);
+      }
       const featureNames = Array.isArray(features) ? features.filter((feature): feature is string => typeof feature === 'string') : [];
       if (featureNames.length === 0) {
         device.behaviors.require(behavior, attributes);

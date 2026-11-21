@@ -32,6 +32,13 @@ If you like this project and find it useful, please consider giving it a star on
 
 ---
 
+## [1.0.0-oregon.2] - Dev branch
+
+### Added
+
+- [platform]: Accept a `behavior` name in a cluster config to select a variant of the cluster server.
+- [platform]: Add the `deviceState` behavior of RvcRunMode and RvcOperationalState, which leaves the operational state to the device's state messages.
+
 ## [1.0.0-oregon.1] - 2026-11-21
 
 ### Added

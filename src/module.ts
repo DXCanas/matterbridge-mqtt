@@ -54,6 +54,8 @@ export interface MqttPlatformConfig extends PlatformConfig {
   topic: string;
   whiteList: string[];
   blackList: string[];
+  // When true, attribute changes that do not come from a Matter controller are not published on the write topic.
+  ignoreLocalChanges?: boolean;
 }
 
 // A retained MQTT payload for a device subTopic (config, state or subscribe).
@@ -606,7 +608,12 @@ export class MqttPlatform extends MatterbridgeDynamicPlatform {
             );
             continue;
           }
-          device.subscribeAttribute(clusterName, attributeName, (value) => {
+          device.subscribeAttribute(clusterName, attributeName, (value, _oldValue, context) => {
+            // A change made locally (e.g. by a state message through setCluster) has no fabric: only controller changes have one.
+            if (this.config.ignoreLocalChanges === true && context?.fabric === undefined) {
+              this.log.debug(`Not publishing local change of subscribed attribute '${clusterName}:${attributeName}' on device '${deviceId}' (ignoreLocalChanges)`);
+              return;
+            }
             this.log.debug(`Received update for subscribed attribute '${clusterName}:${attributeName}' on device '${deviceId}': ${debugStringify(value)}`);
             const subscribeTopic = `${this.config.topic}/${deviceId}/write/${endpointName}`;
             const payload = JSON.stringify({ [clusterName]: { [attributeName]: value } });

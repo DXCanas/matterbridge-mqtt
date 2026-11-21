@@ -99,6 +99,12 @@
       "uniqueItems": true,
       "selectFrom": "name"
     },
+    "ignoreLocalChanges": {
+      "title": "Ignore Local Changes",
+      "description": "Publish on the write topic only the attribute changes made by a Matter controller. When enabled, the changes made by the device's own state messages are not sent back to it as writes.",
+      "type": "boolean",
+      "default": false
+    },
     "debug": {
       "title": "Enable Debug",
       "description": "Enable the debug for the plugin (development only)",

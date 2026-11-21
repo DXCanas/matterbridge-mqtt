@@ -845,6 +845,35 @@ describe('MqttPlatform', () => {
       getDeviceByIdSpy.mockRestore();
     });
 
+    it('should publish only controller changes when ignoreLocalChanges is enabled', async () => {
+      let listener: ((value: unknown, oldValue: unknown, context?: { fabric?: number }) => void) | undefined;
+      const mockDevice = {
+        hasClusterServer: vi.fn<(cluster?: unknown) => boolean>().mockReturnValue(true),
+        hasAttributeServer: vi.fn<(cluster?: unknown, attribute?: unknown) => boolean>().mockReturnValue(true),
+        subscribeAttribute: vi
+          .fn<(cluster: string, attribute: string, l: (value: unknown, oldValue: unknown, context?: { fabric?: number }) => void) => void>()
+          .mockImplementation((_cluster, _attribute, l) => {
+            listener = l;
+          }),
+      };
+      // oxlint-disable-next-line typescript/ban-ts-comment
+      // @ts-ignore accessing inherited method for testing
+      const getDeviceByIdSpy = vi.spyOn(platform, 'getDeviceById').mockReturnValue(mockDevice);
+      platform.config.ignoreLocalChanges = true;
+      await platform.subscribeHandler(`${config.topic}/local1/subscribe/root`, JSON.stringify({ OnOff: ['onOff'] }));
+      listener?.(true, false, {});
+      listener?.(true, false);
+      expect(mqttPublishSpy).not.toHaveBeenCalled();
+      expect(loggerDebugSpy).toHaveBeenCalledWith(expect.stringMatching(/Not publishing local change of subscribed attribute 'OnOff:onOff' on device 'local1'/));
+      listener?.(false, true, { fabric: 1 });
+      expect(mqttPublishSpy).toHaveBeenCalledTimes(1);
+      expect(mqttPublishSpy).toHaveBeenCalledWith(`${config.topic}/local1/write/root`, JSON.stringify({ OnOff: { onOff: false } }), { retain: false });
+      platform.config.ignoreLocalChanges = false;
+      listener?.(true, false, {});
+      expect(mqttPublishSpy).toHaveBeenCalledTimes(2);
+      getDeviceByIdSpy.mockRestore();
+    });
+
     it('should subscribe known attributes and skip unknown attributes in the same cluster', async () => {
       const mockDevice = {
         hasClusterServer: vi.fn<(cluster?: unknown) => boolean>().mockReturnValue(true),

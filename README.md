@@ -56,6 +56,7 @@ The plugin is configured through the Matterbridge frontend. The settings are sto
 | `key`                | _(empty)_          | Path to the client private key file for mutual TLS authentication.                                                 |
 | `rejectUnauthorized` | `true`             | Reject brokers with self-signed or untrusted TLS certificates. Set to `false` for self-signed brokers.             |
 | `topic`              | `matterbridge`     | Base topic prefix used for all device topics.                                                                      |
+| `ignoreLocalChanges` | `false`            | Publish on the `write` topic only the changes made by a Matter controller, not the ones made by `state` messages.  |
 
 ### Minimal configuration example
 

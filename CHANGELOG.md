@@ -37,6 +37,7 @@ If you like this project and find it useful, please consider giving it a star on
 ### Added
 
 - [platform]: Accept a `features` list in a cluster config to select the cluster features.
+- [platform]: Add the `ignoreLocalChanges` option to publish on the write topic only the changes made by a Matter controller.
 
 ## [1.0.0] - 2026-11-14
 

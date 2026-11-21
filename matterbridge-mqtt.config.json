@@ -15,6 +15,7 @@
   "topic": "matterbridge",
   "whiteList": [],
   "blackList": [],
+  "ignoreLocalChanges": false,
   "debug": false,
   "unregisterOnShutdown": false
 }

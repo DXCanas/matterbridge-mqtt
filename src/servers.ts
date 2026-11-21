@@ -21,10 +21,10 @@
  * limitations under the License.
  */
 
-import { MatterbridgeServer } from 'matterbridge';
+import { MatterbridgeFanControlServer, MatterbridgeServer } from 'matterbridge';
 import { MatterbridgeRvcOperationalStateServer, MatterbridgeRvcRunModeServer } from 'matterbridge/devices';
-import type { Behavior } from 'matterbridge/matter';
-import { ModeBase, type OperationalState, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
+import type { Behavior, MaybePromise } from 'matterbridge/matter';
+import { FanControl, ModeBase, type OperationalState, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
 import type { ClusterId } from 'matterbridge/matter/types';
 
 /** The RvcRunMode Idle mode tag, as the number a mode tag carries. */
@@ -113,10 +113,69 @@ export class DeviceStateRvcOperationalStateServer extends MatterbridgeRvcOperati
   }
 }
 
+/** The internal state of {@link LastSpeedFanControlServer}, kept per endpoint. */
+class LastSpeedFanControlInternal {
+  /** The fan mode and percent setting (null when unknown) the fan last had while it was not off. */
+  lastSpeed?: { fanMode: FanControl.FanMode; percentSetting: number | null };
+}
+
+/**
+ * FanControl server for a device that turns on at its last speed (`"behavior": "lastSpeed"`).
+ *
+ * Matterbridge's `MatterbridgeFanControlServer` turns a fanMode On (deprecated in the spec, but what a controller writes to
+ * just turn a fan on) into High. This variant remembers the last fanMode and percentSetting the fan had while it was not
+ * off, and turns On into those. Matterbridge's reactors still handle every change, including deriving speedSetting from
+ * percentSetting; until the fan has been on, On still becomes High.
+ */
+export class LastSpeedFanControlServer extends MatterbridgeFanControlServer {
+  static override readonly Internal = LastSpeedFanControlInternal;
+  declare protected internal: LastSpeedFanControlInternal;
+
+  override initialize(): MaybePromise {
+    const result = super.initialize();
+    // Registered after Matterbridge's reactors: the fanMode$Changing reactor runs after Matterbridge has turned On into High.
+    // matter.js calls a reactor with `this` bound to the active behavior instance (Behavior.reactTo), so passing the methods is safe.
+    // oxlint-disable typescript/unbound-method
+    this.reactTo(this.events.fanMode$Changing, this.#restoreLastSpeed);
+    this.reactTo(this.events.fanMode$Changed, this.#rememberSpeed);
+    this.reactTo(this.events.percentSetting$Changed, this.#rememberSpeed);
+    // oxlint-enable typescript/unbound-method
+    this.#rememberSpeed();
+    return result;
+  }
+
+  /**
+   * Remembers the fan mode and percent setting while the fan is not off.
+   */
+  #rememberSpeed(): void {
+    const { fanMode, percentSetting } = this.state;
+    if (fanMode === FanControl.FanMode.Off) return;
+    this.internal.lastSpeed = { fanMode, percentSetting: percentSetting === null || percentSetting === 0 ? null : percentSetting };
+  }
+
+  /**
+   * Turns a fanMode On, which Matterbridge has already turned into High, into the remembered fan mode and percent setting.
+   *
+   * @param {FanControl.FanMode} fanMode - The fan mode being written.
+   */
+  #restoreLastSpeed(fanMode: FanControl.FanMode): void {
+    const lastSpeed = this.internal.lastSpeed;
+    // oxlint-disable-next-line typescript/no-deprecated -- On is deprecated in the spec, but it is what controllers write and what this variant handles.
+    if (fanMode !== FanControl.FanMode.On || lastSpeed === undefined) return;
+    const device = this.endpoint.stateOf(MatterbridgeServer);
+    this.state.fanMode = lastSpeed.fanMode;
+    if (lastSpeed.fanMode !== FanControl.FanMode.Auto && lastSpeed.percentSetting !== null) this.state.percentSetting = lastSpeed.percentSetting;
+    device.log.debug(
+      `LastSpeedFanControlServer: fanMode On >>> last fanMode ${lastSpeed.fanMode} percentSetting ${this.state.percentSetting} (endpoint ${this.endpoint.maybeId}.${this.endpoint.maybeNumber})`,
+    );
+  }
+}
+
 /**
  * The server variants a cluster config can select with its `behavior` key, by cluster id and variant name.
  */
 export const behaviorVariants: ReadonlyMap<ClusterId, Readonly<Record<string, Behavior.Type>>> = new Map<ClusterId, Readonly<Record<string, Behavior.Type>>>([
   [RvcRunMode.id, { deviceState: DeviceStateRvcRunModeServer }],
   [RvcOperationalState.id, { deviceState: DeviceStateRvcOperationalStateServer }],
+  [FanControl.id, { lastSpeed: LastSpeedFanControlServer }],
 ]);

@@ -119,10 +119,11 @@ const config = {
 
 A cluster may also carry an optional `behavior` name to use a variant of Matterbridge's cluster server. Like `features`, it is not an attribute. Without it, or with a name the cluster does not have (logged as a warning), the cluster uses Matterbridge's server.
 
-| Cluster               | `behavior`      | Difference from Matterbridge's server                                                                                                                                                                                |
-| --------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RvcRunMode`          | `"deviceState"` | `changeToMode` validates the mode (supported, DirectModeChange rule) and sets `currentMode`, but does not set the RvcOperationalState (Matterbridge: a Cleaning mode makes it Running, an Idle mode SeekingCharger). |
-| `RvcOperationalState` | `"deviceState"` | `pause`, `resume` and `goHome` answer like Matterbridge's, but do not change `operationalState` or `operationalError`.                                                                                               |
+| Cluster               | `behavior`      | Difference from Matterbridge's server                                                                                                                                                                                                             |
+| --------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RvcRunMode`          | `"deviceState"` | `changeToMode` validates the mode (supported, DirectModeChange rule) and sets `currentMode`, but does not set the RvcOperationalState (Matterbridge: a Cleaning mode makes it Running, an Idle mode SeekingCharger).                              |
+| `RvcOperationalState` | `"deviceState"` | `pause`, `resume` and `goHome` answer like Matterbridge's, but do not change `operationalState` or `operationalError`.                                                                                                                            |
+| `FanControl`          | `"lastSpeed"`   | A `fanMode` On (what a controller writes to just turn the fan on) becomes the last `fanMode` and `percentSetting` the fan had while it was not off, instead of High. Until the fan has been on since Matterbridge started, On still becomes High. |
 
 With `deviceState`, the device's `state` messages are the only source of the operational state, so a device whose Idle modes do different things (e.g. stop in place and dock) can report what it really does.
 
@@ -133,6 +134,15 @@ const config = {
     RvcRunMode: { behavior: 'deviceState', features: ['DirectModeChange'], supportedModes: [/* ... */], currentMode: 1 },
     RvcOperationalState: { behavior: 'deviceState', operationalStateList: [/* ... */], operationalState: 66 },
   },
+};
+```
+
+With `lastSpeed`, "turn on the fan" brings the fan back at its last speed. The plugin remembers the speed from the fan's `state` messages and from controller changes; Matterbridge still derives `speedSetting` from `percentSetting`.
+
+```typescript
+const config = {
+  deviceTypes: ['Fan'],
+  clusters: { FanControl: { behavior: 'lastSpeed', features: ['MultiSpeed'], fanModeSequence: 0, speedMax: 4 } },
 };
 ```
 

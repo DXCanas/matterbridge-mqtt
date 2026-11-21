@@ -19,7 +19,7 @@ import { bridgedNode, MatterbridgeEndpoint, MatterbridgeServiceAreaServer, type 
 import { MatterbridgeRvcCleanModeServer, MatterbridgeRvcOperationalStateServer, MatterbridgeRvcRunModeServer } from 'matterbridge/devices';
 import { LogLevel } from 'matterbridge/logger';
 import { ClusterBehavior } from 'matterbridge/matter';
-import { ModeBase, RvcCleanMode, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
+import { FanControl, ModeBase, RvcCleanMode, RvcOperationalState, RvcRunMode } from 'matterbridge/matter/clusters';
 import {
   addMatterbridge,
   createServerNode,
@@ -42,7 +42,7 @@ import type { IPublishPacket } from 'mqtt';
 
 import initializePlugin, { MqttPlatform, type MqttPlatformConfig } from '../src/module.js';
 import { MqttService } from '../src/mqtt.js';
-import { DeviceStateRvcOperationalStateServer, DeviceStateRvcRunModeServer } from '../src/servers.js';
+import { DeviceStateRvcOperationalStateServer, DeviceStateRvcRunModeServer, LastSpeedFanControlServer } from '../src/servers.js';
 
 const mqttConnectSpy = vi.spyOn(MqttService.prototype, 'connect').mockResolvedValue(true);
 const mqttCloseSpy = vi.spyOn(MqttService.prototype, 'close').mockResolvedValue(true);
@@ -798,6 +798,112 @@ describe('MqttPlatform', () => {
       // Matterbridge's own logic stays the default
       await device.act(async (agent) => agent.get(MatterbridgeRvcRunModeServer).changeToMode({ newMode: 3 }));
       expect(device.getAttribute('RvcOperationalState', 'operationalState')).toBe(RvcOperationalState.OperationalState.Running);
+    });
+
+    /**
+     * Creates and registers a fan with the given FanControl config.
+     *
+     * @param {string} id - The device id.
+     * @param {Record<string, unknown>} fanControl - The FanControl cluster config.
+     * @returns {Promise<MatterbridgeEndpoint>} The registered device.
+     */
+    async function registerFan(id: string, fanControl: Record<string, unknown>): Promise<MatterbridgeEndpoint> {
+      const registerDeviceSpy = vi.spyOn(platform, 'registerDevice');
+      platform.createDevice(id, 'root', { deviceTypes: ['Fan'], clusters: { FanControl: fanControl } });
+      await registerDeviceSpy.mock.results[0]?.value;
+      const device = registerDeviceSpy.mock.calls[0]?.[0];
+      registerDeviceSpy.mockRestore();
+      if (!device) throw new Error(`Fan ${id} not registered`);
+      expect(device.construction.status).toBe('active');
+      return device;
+    }
+
+    /**
+     * Writes fanMode On, as a controller turning the fan on does, and lets the change events run.
+     *
+     * @param {MatterbridgeEndpoint} device - The fan.
+     */
+    async function turnOn(device: MatterbridgeEndpoint): Promise<void> {
+      // oxlint-disable-next-line typescript/no-deprecated -- On is what a controller writes to turn a fan on.
+      await device.setAttribute('FanControl', 'fanMode', FanControl.FanMode.On);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const fanSpeed = (device: MatterbridgeEndpoint): unknown[] => ['fanMode', 'percentSetting', 'speedSetting'].map((attribute) => device.getAttribute('FanControl', attribute));
+    const fourSpeedFan = {
+      features: ['MultiSpeed'],
+      fanMode: FanControl.FanMode.Off,
+      fanModeSequence: FanControl.FanModeSequence.OffLowMedHigh,
+      percentSetting: 0,
+      percentCurrent: 0,
+      speedMax: 4,
+      speedSetting: 0,
+      speedCurrent: 0,
+    };
+
+    it('should turn a fanMode On into High with Matterbridge default behavior', async () => {
+      const device = await registerFan('fan-default', fourSpeedFan);
+      await device.setCluster('FanControl', { fanMode: FanControl.FanMode.Medium, percentSetting: 50, speedSetting: 2 });
+      await device.setCluster('FanControl', { fanMode: FanControl.FanMode.Off, percentSetting: 0, speedSetting: 0 });
+      await turnOn(device);
+      expect(fanSpeed(device)).toEqual([FanControl.FanMode.High, 84, 4]);
+    });
+
+    it('should turn a fanMode On into the last speed with the lastSpeed behavior', async () => {
+      const device = await registerFan('fan-last-speed', { ...fourSpeedFan, behavior: 'lastSpeed' });
+      const fanControl = device.behaviors.supported.fanControl;
+      expect(fanControl?.prototype).toBeInstanceOf(LastSpeedFanControlServer);
+      expect(fanControl && ClusterBehavior.isType(fanControl) ? fanControl.features : undefined).toMatchObject({ multiSpeed: true });
+      expect(fanControl ? device.behaviors.optionsFor(fanControl) : undefined).not.toHaveProperty('behavior');
+      const changes: [string, unknown][] = [];
+      for (const attribute of ['fanMode', 'percentSetting', 'speedSetting']) {
+        device.subscribeAttribute('FanControl', attribute, (value: unknown) => changes.push([attribute, value]));
+      }
+
+      // Never on: Matterbridge's High
+      await turnOn(device);
+      expect(fanSpeed(device)).toEqual([FanControl.FanMode.High, 84, 4]);
+      // On at speed 2 of 4 (Medium, 50%), then off, then On: speed 2, and only the final values change
+      await device.setCluster('FanControl', { fanMode: FanControl.FanMode.Medium, percentSetting: 50, speedSetting: 2 });
+      await device.setCluster('FanControl', { fanMode: FanControl.FanMode.Off, percentSetting: 0, speedSetting: 0 });
+      changes.length = 0;
+      await turnOn(device);
+      expect(fanSpeed(device)).toEqual([FanControl.FanMode.Medium, 50, 2]);
+      expect(changes).toEqual([
+        ['fanMode', FanControl.FanMode.Medium],
+        ['percentSetting', 50],
+        ['speedSetting', 2],
+      ]);
+      // On while on: no change
+      changes.length = 0;
+      await turnOn(device);
+      expect(fanSpeed(device)).toEqual([FanControl.FanMode.Medium, 50, 2]);
+      expect(changes).toEqual([]);
+      // A controller's percentSetting is remembered too
+      await device.setAttribute('FanControl', 'percentSetting', 66);
+      await device.setAttribute('FanControl', 'fanMode', FanControl.FanMode.Off);
+      await turnOn(device);
+      expect(fanSpeed(device)).toEqual([FanControl.FanMode.Medium, 66, 3]);
+    });
+
+    it('should turn a fanMode On into the last Auto mode, or the last fan mode when the percent setting is not known, with the lastSpeed behavior', async () => {
+      const autoFan = await registerFan('fan-last-auto', {
+        behavior: 'lastSpeed',
+        fanMode: FanControl.FanMode.Auto,
+        fanModeSequence: FanControl.FanModeSequence.OffLowMedHighAuto,
+        percentSetting: null,
+        percentCurrent: 0,
+      });
+      await autoFan.setAttribute('FanControl', 'fanMode', FanControl.FanMode.Off);
+      await turnOn(autoFan);
+      expect(fanSpeed(autoFan).slice(0, 2)).toEqual([FanControl.FanMode.Auto, null]);
+
+      // A fan configured on Low with no percent setting
+      const lowFan = await registerFan('fan-last-low', { ...fourSpeedFan, behavior: 'lastSpeed', fanMode: FanControl.FanMode.Low });
+      await lowFan.setAttribute('FanControl', 'fanMode', FanControl.FanMode.Off);
+      await turnOn(lowFan);
+      // Low with Matterbridge's percent setting for Low (the middle of 1-33)
+      expect(fanSpeed(lowFan)).toEqual([FanControl.FanMode.Low, 17, 1]);
     });
 
     it('should point the configUrl at the plugin frontend with the device id', () => {

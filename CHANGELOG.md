@@ -38,6 +38,7 @@ If you like this project and find it useful, please consider giving it a star on
 
 - [platform]: Accept a `behavior` name in a cluster config to select a variant of the cluster server.
 - [platform]: Add the `deviceState` behavior of RvcRunMode and RvcOperationalState, which leaves the operational state to the device's state messages.
+- [platform]: Add the `lastSpeed` behavior of FanControl, which turns a fanMode On into the last speed instead of High.
 
 ## [1.0.0-oregon.1] - 2026-11-21
 
